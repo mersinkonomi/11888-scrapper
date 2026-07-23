@@ -1,9 +1,11 @@
 import time
 import sqlite3
 import random
-from selenium import webdriver
+import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, WebDriverException
 
 # --- Setup SQLite Database ---
 conn = sqlite3.connect('11888_data.db')
@@ -20,9 +22,6 @@ CREATE TABLE IF NOT EXISTS contacts (
 ''')
 conn.commit()
 
-# --- Setup Selenium Service ---
-service = Service()  # Specify chromedriver path if needed
-
 # --- List of Proxies ---
 proxies = [
     "http://proxy1:port",  # Replace with your actual proxy addresses
@@ -31,97 +30,109 @@ proxies = [
 ]
 
 def create_driver(proxy):
-    """Creates a new Chrome WebDriver instance with the given proxy."""
-    options = webdriver.ChromeOptions()
-    options.add_argument('--headless')
+    """Creates a patched Chrome WebDriver to bypass bot detection."""
+    options = uc.ChromeOptions()
+    
     options.add_argument("--disable-gpu")
     options.add_argument("--log-level=3")
+    
+    # Note: We do NOT set a custom user-agent. 
+    # uc automatically patches in a clean, legitimate one.
+    
     if proxy:
         options.add_argument(f'--proxy-server={proxy}')
-    return webdriver.Chrome(service=service, options=options)
+        
+    # Initialize the undetected driver
+    driver = uc.Chrome(
+        options=options,
+        headless=True,       # uc handles headless mode specially
+        use_subprocess=True  # Recommended to prevent hanging zombie processes
+    )
+    
+    return driver
 
-def has_data(page_number, driver):
-    """
-    Returns True if the page at the given number contains data.
-    If there's no data, the site may redirect away from the search URL.
-    """
-    url = f"https://www.11888.gr/search/white_pages/{page_number}/"
-    driver.get(url)
-    time.sleep(0.2)  # Allow time for page to load
-    if "search/white_pages" not in driver.current_url:
-        return False
+# --- Scraping Logic ---
+scrape_page = 1
+max_pages = 50000000
+requests_with_current_ip = 0
+MAX_REQUESTS_PER_IP = 100  # Rotate IP after 100 successful requests
+
+driver = None
+
+while scrape_page < max_pages:
     try:
-        element = driver.find_element(By.CSS_SELECTOR, "div.details")
-        return bool(element.text.strip())
-    except Exception:
-        return False
+        # Initialize driver or rotate proxy if we hit the request limit
+        if driver is None or requests_with_current_ip >= MAX_REQUESTS_PER_IP:
+            if driver:
+                driver.quit()
+            
+            # Select a random proxy (in production, you'd want logic to ensure it's not the same as the last one)
+            proxy = random.choice(proxies) if proxies else None
+            print(f"[*] Booting session. Proxy: {proxy or 'Direct IP'}")
+            
+            driver = create_driver(proxy)
+            requests_with_current_ip = 0
 
-scrape_page = 1  # Change this number for the first page to check
-previous_proxy = None  # Variable to store the previous proxy
+        url = f"https://www.11888.gr/search/white_pages/{scrape_page}/"
+        driver.get(url)
+        requests_with_current_ip += 1
+        
+        # Explicit Wait: Wait up to 5 seconds for the data container to load
+        wait = WebDriverWait(driver, 5)
+        
+        # Check for redirects (if page has no data, they might redirect)
+        if "search/white_pages" not in driver.current_url:
+            print(f"Redirected away on page {scrape_page}. Skipping.")
+            scrape_page += 1
+            continue
 
-while scrape_page < 50000000:  # or use "while True" if desired
-    # Rotate IP by selecting a random proxy and ensure it's different from the previous one (if possible)
-    proxy = random.choice(proxies)
-    if previous_proxy is not None and len(proxies) > 1:
-        while proxy == previous_proxy:
-            proxy = random.choice(proxies)
-    previous_proxy = proxy
+        try:
+            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.details")))
+            details_containers = driver.find_elements(By.CSS_SELECTOR, "div.details")
+        except TimeoutException:
+            print(f"No details found or timeout on page {scrape_page}.")
+            scrape_page += 1
+            continue
 
-    driver = create_driver(proxy)
-    
-    url = f"https://www.11888.gr/search/white_pages/{scrape_page}/"
-    print(f"Scraping page: {scrape_page} using proxy: {proxy} - {url}")
-    driver.get(url)
-    time.sleep(0.2)
-    
-    details_containers = driver.find_elements(By.CSS_SELECTOR, "div.details")
-    if not details_containers:
-        print(f"No details found on page {scrape_page}.")
-    else:
         print(f"Data found on page {scrape_page}.")
         for container in details_containers:
-            driver.execute_script("arguments[0].scrollIntoView();", container)
-            # --- Extract the name ---
             try:
-                name_elem = container.find_element(By.CSS_SELECTOR, "div.share_header div.name h1")
-                name = name_elem.text.strip()
-            except Exception as e:
-                print("Error extracting name:", e)
+                name = container.find_element(By.CSS_SELECTOR, "div.share_header div.name h1").text.strip()
+            except Exception:
                 name = "N/A"
             
-            # --- Extract the location ---
             try:
-                location_elem = container.find_element(By.CSS_SELECTOR, "div.location div.address")
-                location = location_elem.text.strip()
-            except Exception as e:
-                print("Error extracting location:", e)
+                location = container.find_element(By.CSS_SELECTOR, "div.location div.address").text.strip()
+            except Exception:
                 location = "N/A"
             
-            # --- Extract phone numbers ---
             try:
                 phone_elems = container.find_elements(By.CSS_SELECTOR, "div.phones a.tel-link")
-                phones_list = []
-                for phone_elem in phone_elems:
-                    href = phone_elem.get_attribute("href")
-                    if href and "tel:" in href:
-                        number = href.split("tel:")[-1].strip()
-                        phones_list.append(number)
-                phones = ", ".join(phones_list) if phones_list else "N/A"
-            except Exception as e:
-                print("Error extracting phones:", e)
+                phones = ", ".join([elem.get_attribute("href").split("tel:")[-1].strip() for elem in phone_elems if "tel:" in elem.get_attribute("href")])
+            except Exception:
                 phones = "N/A"
-            
-            page_url = driver.current_url
             
             cursor.execute(
                 "INSERT INTO contacts (name, location, phones, page_url, page) VALUES (?, ?, ?, ?, ?)",
-                (name, location, phones, page_url, scrape_page)
+                (name, location, phones or "N/A", driver.current_url, scrape_page)
             )
-            conn.commit()
-            print(f"Inserted: {name} | {location} | {phones} | {page_url}")
-    
-    driver.quit()  # Close the driver to change IP on the next iteration
-    scrape_page += 1
+            print(f"Inserted: {name} | {location} | {phones}")
+        
+        conn.commit()
+        scrape_page += 1
+
+    except WebDriverException as e:
+        # Catches network errors, target machine actively refusing connection, or driver crashes
+        print(f"[!] WebDriver error: {e}. Rotating IP and retrying page {scrape_page}...")
+        if driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+        driver = None 
+        # Do not increment scrape_page here so the loop retries the same page
 
 print("Scraping complete!")
+if driver:
+    driver.quit()
 conn.close()
