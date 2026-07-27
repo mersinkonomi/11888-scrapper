@@ -1,8 +1,8 @@
 # 11888 Scraper
 
-Python scraper για σελίδες του ελληνικού τηλεφωνικού καταλόγου 11888. Ανοίγει
-τις σελίδες με headless Google Chrome και αποθηκεύει τις επαφές σε τοπική βάση
-SQLite.
+Python scraper για σελίδες του ελληνικού τηλεφωνικού καταλόγου 11888.
+Χρησιμοποιεί ελαφριά HTTP requests, τρέχει 10 παράλληλους workers και
+αποθηκεύει όλες τις επαφές σε κοινή τοπική βάση SQLite.
 
 > Χρησιμοποίησέ το μόνο όπου έχεις νόμιμο δικαίωμα συλλογής και επεξεργασίας
 > των δεδομένων. Σεβάσου τους όρους χρήσης του ιστοτόπου, το απόρρητο και την
@@ -21,22 +21,15 @@ SQLite.
 | `page_url` | URL της σελίδας |
 | `page` | Αριθμητικό ID σελίδας |
 
-Η βάση και το `contacts.csv` δημιουργούνται στον φάκελο από τον οποίο τρέχεις
-τις εντολές. Για αυτό όλες οι παρακάτω εντολές εκτελούνται μέσα στον φάκελο του
-repository.
+Η βάση δημιουργείται πάντα δίπλα στο `autoscrap.py`, ανεξάρτητα από τον φάκελο
+από τον οποίο ξεκινάς την εντολή. Το `contacts.csv` δημιουργείται στον τρέχοντα
+φάκελο όταν εκτελείς το `sqliteToCSV.py`.
 
 ## Απαιτήσεις
 
 - Python 3
-- Google Chrome εγκατεστημένο
 - Git, μόνο αν θα κάνεις clone το repository
 - Σύνδεση στο Internet
-
-Στο macOS το script ελέγχει το Chrome στην προεπιλεγμένη διαδρομή:
-
-```text
-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome
-```
 
 ## Εγκατάσταση από την αρχή
 
@@ -75,35 +68,53 @@ python -m pip install -r requirements.txt
 
 ## Εκτέλεση
 
-Κάθε φορά που ανοίγεις καινούριο Terminal:
+Για να ξεκινήσεις και τους 10 workers:
 
 ```bash
 cd /Users/mersin/Desktop/18888/11888-scrapper
-source .venv/bin/activate
-python autoscrap.py
+./run_10_workers.sh
 ```
 
-Εναλλακτικά, χωρίς ενεργοποίηση του virtual environment:
+Ο launcher χρησιμοποιεί αυτόματα το `.venv` και χωρίζει το εύρος
+`0–99.999.999` ως εξής:
 
-```bash
-cd /Users/mersin/Desktop/18888/11888-scrapper
-.venv/bin/python autoscrap.py
+```text
+worker 0:  0–9.999.999
+worker 1:  10.000.000–19.999.999
+...
+worker 9:  90.000.000–99.999.999
 ```
 
 Η επιτυχής εκκίνηση εμφανίζει μηνύματα όπως:
 
 ```text
-[*] Booting session. Proxy: Direct IP
-Scraping page 123: https://www.11888.gr/white-pages/123/
+Starting worker 0: 0-9999999
+[*] HTTP session. Proxy: Direct IP
+Scraping page 90000009: https://www.11888.gr/white-pages/90000009/
 Inserted: ...
 ```
 
 - `Inserted:` σημαίνει ότι αποθηκεύτηκε νέα επαφή.
 - `No contact on page ...` σημαίνει ότι η συγκεκριμένη σελίδα δεν είχε
   αναγνωρίσιμη επαφή. Δεν είναι σφάλμα.
+- `HTTP 503 ... Retrying` σημαίνει προσωρινό σφάλμα του site. Ο worker
+  περιμένει και δοκιμάζει ξανά την ίδια σελίδα χωρίς να τη χάσει.
 - Κάθε επαφή γίνεται `commit` αμέσως στη βάση.
-- Αν υπάρχει ήδη βάση, το script συνεχίζει από το μεγαλύτερο αποθηκευμένο
-  `page` συν ένα.
+- Η πρόοδος κάθε range αποθηκεύεται στον πίνακα `scrape_progress`, ώστε η
+  επόμενη εκτέλεση να συνεχίζει από εκεί που σταμάτησε.
+- Δεν επιτρέπεται δεύτερο ταυτόχρονο batch από τον launcher.
+
+Για έναν μόνο worker με δικό σου range:
+
+```bash
+.venv/bin/python autoscrap.py --start 90000000 --end 91000000
+```
+
+Τα logs κάθε batch δημιουργούνται σε νέο φάκελο, για παράδειγμα:
+
+```text
+logs/20260727_230500/worker_9.log
+```
 
 ### Διακοπή
 
@@ -114,6 +125,7 @@ Control + C
 ```
 
 Οι εγγραφές που είχαν ήδη εμφανίσει `Inserted:` παραμένουν αποθηκευμένες.
+Ο launcher τερματίζει και τους 10 workers και αποθηκεύει την πρόοδό τους.
 
 ## Έλεγχος αποθηκευμένων εγγραφών
 
@@ -175,7 +187,7 @@ python -m pip install -r requirements.txt
 
 ## Συνηθισμένα προβλήματα
 
-### `ModuleNotFoundError: No module named 'undetected_chromedriver'`
+### `ModuleNotFoundError: No module named 'requests'`
 
 Δεν έχουν εγκατασταθεί οι εξαρτήσεις στο Python environment που χρησιμοποιείς:
 
@@ -183,23 +195,13 @@ python -m pip install -r requirements.txt
 cd /Users/mersin/Desktop/18888/11888-scrapper
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-python autoscrap.py
+./run_10_workers.sh
 ```
 
-### Δεν ανοίγει το Chrome
+### `Another 10-worker run is already active`
 
-Επιβεβαίωσε ότι είναι εγκατεστημένο:
-
-```bash
-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version
-```
-
-Έπειτα ενημέρωσε το Chrome και ξανατρέξε:
-
-```bash
-cd /Users/mersin/Desktop/18888/11888-scrapper
-.venv/bin/python autoscrap.py
-```
+Υπάρχει ήδη ενεργό batch. Χρησιμοποίησε το υπάρχον Terminal ή σταμάτησέ το με
+`Control + C` πριν ξεκινήσεις νέο.
 
 ### Το Terminal δείχνει συνεχώς `No contact`
 
@@ -219,7 +221,9 @@ cd /Users/mersin/Desktop/18888/11888-scrapper
 
 ```text
 autoscrap.py       κύριο scraper
+run_10_workers.sh  launcher για 10 παράλληλους workers
 sqliteToCSV.py     εξαγωγή της βάσης σε contacts.csv
 requirements.txt  Python dependencies
 11888_data.db      SQLite βάση αποτελεσμάτων
+logs/              ξεχωριστά logs ανά batch και worker
 ```

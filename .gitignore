@@ -3,3 +3,8 @@ __pycache__/
 *.py[cod]
 .DS_Store
 *.egg-info/
+logs/
+worker_*.log
+.run_10_workers.lock/
+*.db-wal
+*.db-shm
